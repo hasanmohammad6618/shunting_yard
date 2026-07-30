@@ -17,7 +17,6 @@ enum ParseError {
     MismatchParentheses,
     DecimalPoint,
     DivisionByZero,
-    MissingOperator,
 }
 
 impl fmt::Display for ParseError {
@@ -29,7 +28,6 @@ impl fmt::Display for ParseError {
             ParseError::MismatchParentheses => write!(f, "Mismatched Parentheses"),
             ParseError::DecimalPoint => write!(f, "Decimal Number must have one point"),
             ParseError::DivisionByZero => write!(f, "Division by zero is not defined"),
-            ParseError::MissingOperator => write!(f, "Missing Operator between Parentheses"),
         }
     }
 }
@@ -132,11 +130,123 @@ impl<'a> ShuntingYard<'_> {
 
         Ok(out_tks)
     }
+
+    fn infix_to_postfix(&self) -> Result<Vec<String>, ParseError> {
+        let tokens = self.tokenizer()?;
+        let mut out_stack: Vec<String> = Vec::new();
+        let mut op_stack: Vec<String> = Vec::new();
+
+        for token in tokens {
+            match token {
+                Tokens::Number(num) => out_stack.push(num),
+                Tokens::LeftParen(lp) => {
+                    op_stack.push(lp.to_string());
+                }
+                Tokens::UnaryOperator(u_op) => op_stack.push(format!("u{}", u_op)),
+                Tokens::RightParen => {
+                    if op_stack.last().unwrap() == "(" {
+                        return Err(ParseError::EmptyParentheses);
+                    }
+                    let mut is_lp: bool = false;
+                    while let Some(top) = op_stack.pop() {
+                        if top == "(" {
+                            is_lp = true;
+                            break;
+                        } else {
+                            out_stack.push(top);
+                        }
+                    }
+
+                    if !is_lp {
+                        return Err(ParseError::MismatchParentheses);
+                    }
+                }
+                Tokens::Operator(op) => {
+                    let op_str: String = op.to_string();
+                    while let Some(top_op) = op_stack.last() {
+                        let top_prec = self.precedence(top_op.clone());
+                        let cur_prec = self.precedence(op_str.clone());
+
+                        if top_prec > cur_prec
+                            || (top_prec == cur_prec && !self.is_rt_assoc(op_str.clone()))
+                        {
+                            out_stack.push(op_stack.pop().unwrap());
+                        } else {
+                            break;
+                        }
+                    }
+
+                    op_stack.push(op_str);
+                }
+            }
+        }
+
+        while let Some(ro) = op_stack.pop() {
+            if ro == "(" {
+                return Err(ParseError::MismatchParentheses);
+            }
+            out_stack.push(ro);
+        }
+
+        Ok(out_stack)
+    }
+
+    fn evaluate_postfix(&self) -> Result<f64, ParseError> {
+        let postfix = self.infix_to_postfix()?;
+        let mut stack: Vec<f64> = Vec::new();
+        for token in postfix {
+            if let Ok(num) = token.parse::<f64>() {
+                stack.push(num);
+            } else {
+                match token.as_str() {
+                    "u+" => {
+                        let u_pl = stack.pop().unwrap();
+                        stack.push(u_pl);
+                    }
+                    "u-" => {
+                        let u_mn = stack.pop().unwrap();
+                        stack.push(-u_mn);
+                    }
+                    "^" => {
+                        let b = stack.pop().unwrap();
+                        let a = stack.pop().unwrap();
+
+                        stack.push(a.powf(b));
+                    }
+                    "*" => {
+                        let b = stack.pop().unwrap();
+                        let a = stack.pop().unwrap();
+                        stack.push(a * b);
+                    }
+                    "/" => {
+                        let b = stack.pop().unwrap();
+                        let a = stack.pop().unwrap();
+                        if b == 0. {
+                            return Err(ParseError::DivisionByZero);
+                        }
+                        stack.push(a / b);
+                    }
+                    "+" => {
+                        let b = stack.pop().unwrap();
+                        let a = stack.pop().unwrap();
+                        stack.push(a + b);
+                    }
+                    "-" => {
+                        let b = stack.pop().unwrap();
+                        let a = stack.pop().unwrap();
+                        stack.push(a - b);
+                    }
+                    _ => break,
+                }
+            }
+        }
+        Ok(stack[0])
+    }
 }
 
 fn main() {
     let expr = ShuntingYard { infix: "(-56+67)" };
-    match expr.tokenizer() {
+    match expr.evaluate_postfix() {
         Ok(tk) => println!("{:?}", tk),
         Err(e) => println!("{:?}", e.to_string()),
     }
